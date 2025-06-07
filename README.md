@@ -1,0 +1,35 @@
+# ReflectiveDLL
+Repository này tạo một thư viện động(DLL) Reflective và loader cho nó.
+# Tạo Reflective Dynamic link library
+Tiến hành tạo một Reflective DLL. Trong DLL này, một hàm DllMain được thiết lập để xử lý các tác vụ chính của thư viện. Ở đây, để cho đơn giản DLL sẽ chỉ hiển thị một MessageBox đơn giản báo hiệu tiến trình nạn nhân đã bị chèn mã.
+```C
+BOOL APIENTRY DllMain( HMODULE hModule,
+                       DWORD  ul_reason_for_call,
+                       LPVOID lpReserved
+                     )
+{
+    switch (ul_reason_for_call)
+    {
+    case DLL_PROCESS_ATTACH:
+        MessageBoxA(NULL, "Process nay da bi inject!", "Injected Notice", MB_OK);
+    case DLL_THREAD_ATTACH:
+    case DLL_THREAD_DETACH:
+    case DLL_PROCESS_DETACH:
+        break;
+    }
+    return TRUE;
+}
+```
+## ReflectiveLoader
+Đây là một hàm đặc thù với cơ chế tự tải chính phản thân nó thay vì sử dụng các API của Windows như LoadLibrary từ kernel32. Làm như vậy để DLL sẽ không cần phải có mặt trên đĩa, do LoadLibrary nhân tham số là
+đường dẫn tới DLL trên đĩa. Đồng thời cơ chế tự tải này giúp DLL không có mặt trong danh sách module được tải bời tiến trình, nên sẽ càng khó để phát hiện hơn cách tải sử dụng LoadLibrary thông thường.
+```C
+extern "C" __declspec(dllexport) void ReflectiveLoader()
+```
+Trong đó, khai báo extern "C" để complier biết và sử dụng cách đặt tên kiểu 'C' cho hàm, giúp tên của hàm không bị biến đổi "name mangling" (sự biến đổi nhằm hỗ trợ tính đa hình), vẫn giữ được tên gốc.
+Cách làm này giúp hàm có thể được gọi dễ dàng để liên kết với module khác, bất kể chương trình viết bằng ngôn ngữ gì.
+
+__declspec(dllexport) là directive để khai báo hàm được xuất ra từ DLL.
+
+Trong ReflectiveLoader(), sẽ lần lượt thiết lập các cơ chế tự tìm và tải bản thân trong bộ nhớ tiến trình nạn nhân.
+### Quá trình tự xác định vị trí.
