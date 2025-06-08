@@ -33,3 +33,34 @@ __declspec(dllexport) là directive để khai báo hàm được xuất ra từ
 
 Trong ReflectiveLoader(), sẽ lần lượt thiết lập các cơ chế tự tìm và tải bản thân trong bộ nhớ tiến trình nạn nhân.
 ### Quá trình tự xác định vị trí.
+```C
+HMODULE hModule = NULL;
+__asm
+{
+    call getip
+getip:
+    pop eax
+    sub eax, 5
+    mov hModule, eax
+}
+```
+Đoạn code sau thực hiện lệnh call, sẽ đồng thời nhảy đến nhãn 'getip' và push địa chỉ trả về lên stack. Khi đó, lệnh pop sẽ lưu địa chỉ trả về trong eax, và trừ đi 5 đơn vị (do lệnh call trong x86 dài 5 đơn vị) nên sẽ trả về địa chỉ của lệnh call. -> Ta có được một địa chỉ tham chiếu hModule nằm bên trong hàm ReflectiveLoader. Từ địa chỉ tham chiếu này, ta sẽ dò ngược lên để tìm chữ ký "MZ".
+```C
+ULONG_PTR uLibAddress = (ULONG_PTR)hModule;
+ULONG_PTR uHeader;
+while (TRUE) {
+    if (((PIMAGE_DOS_HEADER)uLibAddress)->e_magic == IMAGE_DOS_SIGNATURE) {
+        uHeader = ((PIMAGE_DOS_HEADER)uLibAddress)->e_lfanew;
+        // Trong x64, mot so instruct co gia tri giong 'MZ', vd: POP r10
+        // Vay nen can check gia tri e_lfanew nam trong [64,1024] cho an toan!
+        if (uHeader >= sizeof(IMAGE_DOS_HEADER) && uHeader < 1024) {
+            uHeader += uLibAddress;
+            // break neu tim thay MZ + PE header
+            if (((PIMAGE_NT_HEADERS)uHeader)->Signature == IMAGE_NT_SIGNATURE)
+                break;
+        }
+    }
+    uLibAddress--;
+}
+```
+Đoạn code này trước hết gán giá trị uLibAddress thành PIMAGE_DOS_HEADER và kiểm tra "MZ", nếu không phải thì tiếp tục giảm giá trị 1 byte để đi ngược về. Tuy nhiên trong x64 thì có những instruction như 'POP r10' có cùng giá trị với "MZ" dẫn tới false positive, nên cần check kích thước e_lfanew thuộc khoảng cho phép và NT signature hợp lệ.
