@@ -64,3 +64,8 @@ while (TRUE) {
 }
 ```
 Đoạn code này trước hết gán giá trị uLibAddress thành PIMAGE_DOS_HEADER và kiểm tra "MZ", nếu không phải thì tiếp tục giảm giá trị 1 byte để đi ngược về. Tuy nhiên trong x64 thì có những instruction như 'POP r10' có cùng giá trị với "MZ" dẫn tới false positive, nên cần check kích thước e_lfanew thuộc khoảng cho phép và NT signature hợp lệ.
+### Quá trình lấy địa chỉ các hàm cần thiết
+Trong quá trình thực hiện ReflectiveLoader, không thể tin tưởng vào cơ chế tự động của linker để thực hiện gọi các hàm API cần cho việc ánh xạ image DLL, như GetProcAddress hay VirtualAlloc. Nguyên nhân do DLL được tải từ bộ nhớ chứ không thông qua trình tải chuẩn của Windows - dẫn tới bảng nhập IAT của module có thể không được thiết lập chuẩn, cần xử lý thủ công để lấy địa chỉ các API.
+1. Tìm Base Address của kernel32.dll
+Cần truy xuất Process Environment Block (PEB) của tiến trình. Mỗi tiến trình trong Windows có một cấu trúc PEB chứa thông tin về module đã nạp. 'kernel32.dll' luôn là một trong những module nạp đầu tiên, nên ReflectiveLoader có thể duyệt danh sách này để tìm địa chỉ của nó.
+Dùng PEB->Ldr->InMemoryOrderModuleList để tìm kernel32.dll và lấy địa chỉ.
