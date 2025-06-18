@@ -21,7 +21,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 }
 ```
 ## ReflectiveLoader
-Đây là một hàm đặc thù với cơ chế tự tải chính phản thân nó thay vì sử dụng các API của Windows như LoadLibrary từ kernel32. Làm như vậy để DLL sẽ không cần phải có mặt trên đĩa, do LoadLibrary nhân tham số là
+Đây là một hàm đặc thù với cơ chế tự tải chính bản thân nó thay vì sử dụng các API của Windows như LoadLibrary từ kernel32. Làm như vậy để DLL sẽ không cần phải có mặt trên đĩa, do LoadLibrary nhận tham số là
 đường dẫn tới DLL trên đĩa. Đồng thời cơ chế tự tải này giúp DLL không có mặt trong danh sách module được tải bời tiến trình, nên sẽ càng khó để phát hiện hơn cách tải sử dụng LoadLibrary thông thường.
 ```C
 extern "C" __declspec(dllexport) void ReflectiveLoader()
@@ -33,37 +33,7 @@ __declspec(dllexport) là directive để khai báo hàm được xuất ra từ
 
 Trong ReflectiveLoader(), sẽ lần lượt thiết lập các cơ chế tự tìm và tải bản thân trong bộ nhớ tiến trình nạn nhân.
 ### Quá trình tự xác định vị trí.
-```C
-HMODULE hModule = NULL;
-__asm
-{
-    call getip
-getip:
-    pop eax
-    sub eax, 5
-    mov hModule, eax
-}
-```
-Đoạn code sau thực hiện lệnh call, sẽ đồng thời nhảy đến nhãn 'getip' và push địa chỉ trả về lên stack. Khi đó, lệnh pop sẽ lưu địa chỉ trả về trong eax, và trừ đi 5 đơn vị (do lệnh call trong x86 dài 5 đơn vị) nên sẽ trả về địa chỉ của lệnh call. -> Ta có được một địa chỉ tham chiếu hModule nằm bên trong hàm ReflectiveLoader. Từ địa chỉ tham chiếu này, ta sẽ dò ngược lên để tìm chữ ký "MZ".
-```C
-ULONG_PTR uLibAddress = (ULONG_PTR)hModule;
-ULONG_PTR uHeader;
-while (TRUE) {
-    if (((PIMAGE_DOS_HEADER)uLibAddress)->e_magic == IMAGE_DOS_SIGNATURE) {
-        uHeader = ((PIMAGE_DOS_HEADER)uLibAddress)->e_lfanew;
-        // Trong x64, mot so instruct co gia tri giong 'MZ', vd: POP r10
-        // Vay nen can check gia tri e_lfanew nam trong [64,1024] cho an toan!
-        if (uHeader >= sizeof(IMAGE_DOS_HEADER) && uHeader < 1024) {
-            uHeader += uLibAddress;
-            // break neu tim thay MZ + PE header
-            if (((PIMAGE_NT_HEADERS)uHeader)->Signature == IMAGE_NT_SIGNATURE)
-                break;
-        }
-    }
-    uLibAddress--;
-}
-```
-Đoạn code này trước hết gán giá trị uLibAddress thành PIMAGE_DOS_HEADER và kiểm tra "MZ", nếu không phải thì tiếp tục giảm giá trị 1 byte để đi ngược về. Tuy nhiên trong x64 thì có những instruction như 'POP r10' có cùng giá trị với "MZ" dẫn tới false positive, nên cần check kích thước e_lfanew thuộc khoảng cho phép và NT signature hợp lệ.
+Có thể dùng 'caller' như Stephen Fewer để DLL tự chủ động hơn thay vì phụ thuộc vào injector. Ở đây tôi sẽ dùng Injector để truyền địa chỉ DLL được chèn trong bộ nhớ thay vì để DLL tự tải. 
 ### Quá trình lấy địa chỉ các hàm cần thiết
 Trong quá trình thực hiện ReflectiveLoader, không thể tin tưởng vào cơ chế tự động của linker để thực hiện gọi các hàm API cần cho việc ánh xạ image DLL, như GetProcAddress hay VirtualAlloc. Nguyên nhân do DLL được tải từ bộ nhớ chứ không thông qua trình tải chuẩn của Windows - dẫn tới bảng nhập IAT của module có thể không được thiết lập chuẩn, cần xử lý thủ công để lấy địa chỉ các API.
 1. Tìm Base Address của kernel32.dll
