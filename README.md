@@ -89,3 +89,42 @@ typedef struct _IMAGE_EXPORT_DIRECTORY {
 * exportDir = module base + export RVA. exportDir sẽ trỏ tới vùng nhớ chứa struct IMAGE_EXPORT_DIRECTORY như trình bày ở trên. Cấu trúc này mô tả các hàm xuất của module, cho biết thông tin về các hàm.
 * Duyệt qua các tên hàm được trỏ trong list địa chỉ AddressOfNames, lấy giá trị ordinal và thu về địa chỉ tương ứng ordinal đó.
 * Trong mục này, ta tìm và lấy 2 thư viện "kernel32.dll" (cho các hàm GetProcAddress, VirtualAlloc, LoadLibraryA) và "ntdll.dll" (cho hàm NtFlushInstructionCache).
+2. Tải DLL từ dạng thô vào 1 vùng khác dưới dạng Image
+Sử dụng VirtualAlloc để cấp phát bộ nhớ trong tiến trình nạn nhân.
+Copy nội dung header sang vị trí mới.
+Copy các section sang vị trí mới, đã căn chỉnh RVA để hoạt động ổn định.
+3. Xử lý import table
+Cần tải các hàm và thư viện vào chương trình để có thể chạy bình thường. Để làm điều này cần xử lý import table, thông qua import directory trong Optional Header.
+Để truy cập, ta cần tính địa chỉ vùng import table = image Base + RVA import directory.
+Bên trong vùng nhớ được trỏ bởi địa chỉ này là import table. Trong Import Table bao gồm chuỗi các cấu trúc IMAGE_IMPORT_DESCRIPTOR như sau:
+```C
+typedef struct _IMAGE_IMPORT_DESCRIPTOR {
+    union {
+        DWORD   Characteristics;
+        DWORD   OriginalFirstThunk;
+    } DUMMYUNIONNAME;
+    DWORD   TimeDateStamp;
+    DWORD   ForwarderChain;
+    DWORD   Name;
+    DWORD   FirstThunk;
+} IMAGE_IMPORT_DESCRIPTOR;
+```
+Sử dụng con trỏ duyệt qua toàn bộ các import descriptor:
+- LoadLibraryA để nạp module với 'Name' tương ứng.
+- Lấy địa chỉ vùng Import Address Table - 'FirstThunk'.
+  ```C
+  typedef struct _IMAGE_THUNK_DATA {
+    union {
+        uint32_t* Function;             // address of imported function
+        uint32_t  Ordinal;              // ordinal value of function
+        PIMAGE_IMPORT_BY_NAME AddressOfData;        // RVA of imported name
+        DWORD ForwarderStringl              // RVA to forwarder string
+    } u1;
+} IMAGE_THUNK_DATA, *PIMAGE_THUNK_DATA;
+  ```
+- Tiến hành bước lấy địa chỉ GetProcAddress bằng Ordinal hoặc bằng tên, với địa chỉ string tên nằm tại imageBase + AddressOfData.
+4. Xử lý relocation
+Trong image của PE file, địa chỉ các phần tử đều biểu diễn bằng RVA tương đối so với imageBase. Mỗi PE file thường có một địa chỉ imageBase native ưu tiên tải vào. Tuy nhiên do tải reflective injection sẽ cấp phát vùng nhớ ngẫu nhiên, không nằm trong native address nên cần xử lý bảng relocation để có thể hoạt động ổn định.
+Trước hết cần đọc Relocation Table tương tự Import Table, lấy địa chỉ vùng này. Vùng này có cấu trúc gồm các khối Relocation Block nối tiếp nhau. Mỗi khối bắt đầu với struct IMAGE_BASE_RELOCATION kích thước 8 byte, chứa thông tin về kích thước khối và địa chỉ RVA của Trang tương ứng với khối này. Tiếp nối sau đó là các struct 2 byte, với 4 byte chỉ type Reloc và 12 byte offset của giá trị Reloc so với địa chỉ của Trang.
+Viết lại toàn bộ giá trị reloc với giá trị Delta Image = địa chỉ Image thật sự trong bộ nhớ - địa chỉ image native.
+5. Sau khi duyệt qua, ta có gọi entry point là địa chỉ hàm DLLMAIN + imageBase để chạy nội dung chính của DLL.
