@@ -36,7 +36,7 @@ Trong ReflectiveLoader(), sẽ lần lượt thiết lập các cơ chế tự t
 Có thể dùng 'caller' như Stephen Fewer để DLL tự chủ động hơn thay vì phụ thuộc vào injector. Ở đây tôi sẽ dùng Injector để truyền địa chỉ DLL được chèn trong bộ nhớ thay vì để DLL tự tải. 
 ### Quá trình lấy địa chỉ các hàm cần thiết
 Trong quá trình thực hiện ReflectiveLoader, không thể tin tưởng vào cơ chế tự động của linker để thực hiện gọi các hàm API cần cho việc ánh xạ image DLL, như GetProcAddress hay VirtualAlloc. Nguyên nhân do DLL được tải từ bộ nhớ chứ không thông qua trình tải chuẩn của Windows - dẫn tới bảng nhập IAT của module có thể không được thiết lập chuẩn, cần xử lý thủ công để lấy địa chỉ các API.
-1. Tìm Base Address của kernel32.dll
+Tìm Base Address của kernel32.dll
 Cần truy xuất Process Environment Block (PEB) của tiến trình. Mỗi tiến trình trong Windows có một cấu trúc PEB chứa thông tin về module đã nạp. 'kernel32.dll' luôn là một trong những module nạp đầu tiên, nên ReflectiveLoader có thể duyệt danh sách này để tìm địa chỉ của nó.
 ```C
 typedef struct _PEB_LDR_DATA //, 7 elements, 0x28 bytes
@@ -89,11 +89,49 @@ typedef struct _IMAGE_EXPORT_DIRECTORY {
 * exportDir = module base + export RVA. exportDir sẽ trỏ tới vùng nhớ chứa struct IMAGE_EXPORT_DIRECTORY như trình bày ở trên. Cấu trúc này mô tả các hàm xuất của module, cho biết thông tin về các hàm.
 * Duyệt qua các tên hàm được trỏ trong list địa chỉ AddressOfNames, lấy giá trị ordinal và thu về địa chỉ tương ứng ordinal đó.
 * Trong mục này, ta tìm và lấy 2 thư viện "kernel32.dll" (cho các hàm GetProcAddress, VirtualAlloc, LoadLibraryA) và "ntdll.dll" (cho hàm NtFlushInstructionCache).
-2. Tải DLL từ dạng thô vào 1 vùng khác dưới dạng Image
+### Tải DLL từ dạng thô vào 1 vùng khác dưới dạng Image
 Sử dụng VirtualAlloc để cấp phát bộ nhớ trong tiến trình nạn nhân.
 Copy nội dung header sang vị trí mới.
 Copy các section sang vị trí mới, đã căn chỉnh RVA để hoạt động ổn định.
-3. Xử lý import table
+```C
+//2. Tai DLL tu dang tho thanh image tai 1 vung nho khac trong memory.
+    ULONG_PTR uHeader = uLibAddress + ((PIMAGE_DOS_HEADER)uLibAddress)->e_lfanew;
+    // allocate memory for DLL to be loaded. Address is arbitrary, all memory is zeros and RWX.
+    uBaseAddress = (ULONG_PTR)pVirtualAlloc(NULL, ((PIMAGE_NT_HEADERS)uHeader)->OptionalHeader.SizeOfImage, MEM_RESERVE|MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    // Copy the header.
+    ULONG_PTR uValueA = ((PIMAGE_NT_HEADERS)uHeader)->OptionalHeader.SizeOfHeaders;
+    BYTE* uSrc = (BYTE*)uLibAddress;
+    BYTE* uDes = (BYTE*)uBaseAddress;
+    while (uValueA)
+    {
+        *uDes = *uSrc;
+        uDes++;
+        uSrc++;
+        uValueA--;
+    }
+    //3. Load sections.
+    // Vi tri section dau tien nam sau header: firstSec = &OptionalHeader + sizeofoptionalheader
+    //uValueA is VA of firstsection
+    uValueA = (ULONG_PTR)(&((PIMAGE_NT_HEADERS)uHeader)->OptionalHeader) + ((PIMAGE_NT_HEADERS)uHeader)->FileHeader.SizeOfOptionalHeader;
+    ULONG_PTR uValueB = ((PIMAGE_NT_HEADERS)uHeader)->FileHeader.NumberOfSections;
+    while (uValueB)
+    {
+        // uSrc is the offset of this section data
+        uSrc = (BYTE*)(uLibAddress + ((PIMAGE_SECTION_HEADER)uValueA)->PointerToRawData);
+        // uDes is the VA of this section image
+        uDes = (BYTE*)(uBaseAddress + ((PIMAGE_SECTION_HEADER)uValueA)->VirtualAddress);
+        // Copy each byte of source to destination
+        for (SIZE_T i = 0; i < ((PIMAGE_SECTION_HEADER)uValueA)->SizeOfRawData; i++)
+        {
+            *uDes = *uSrc;
+            uDes++;
+            uSrc++;
+        }
+        // Get the next sextion
+        uValueA += sizeof(IMAGE_SECTION_HEADER);
+    }
+```
+### Xử lý import table
 Cần tải các hàm và thư viện vào chương trình để có thể chạy bình thường. Để làm điều này cần xử lý import table, thông qua import directory trong Optional Header.
 Để truy cập, ta cần tính địa chỉ vùng import table = image Base + RVA import directory.
 Bên trong vùng nhớ được trỏ bởi địa chỉ này là import table. Trong Import Table bao gồm chuỗi các cấu trúc IMAGE_IMPORT_DESCRIPTOR như sau:
@@ -112,7 +150,7 @@ typedef struct _IMAGE_IMPORT_DESCRIPTOR {
 Sử dụng con trỏ duyệt qua toàn bộ các import descriptor:
 - LoadLibraryA để nạp module với 'Name' tương ứng.
 - Lấy địa chỉ vùng Import Address Table - 'FirstThunk'.
-  ```C
+```C
   typedef struct _IMAGE_THUNK_DATA {
     union {
         uint32_t* Function;             // address of imported function
@@ -121,10 +159,13 @@ Sử dụng con trỏ duyệt qua toàn bộ các import descriptor:
         DWORD ForwarderStringl              // RVA to forwarder string
     } u1;
 } IMAGE_THUNK_DATA, *PIMAGE_THUNK_DATA;
-  ```
+```
 - Tiến hành bước lấy địa chỉ GetProcAddress bằng Ordinal hoặc bằng tên, với địa chỉ string tên nằm tại imageBase + AddressOfData.
-4. Xử lý relocation
+
+### Xử lý relocation
 Trong image của PE file, địa chỉ các phần tử đều biểu diễn bằng RVA tương đối so với imageBase. Mỗi PE file thường có một địa chỉ imageBase native ưu tiên tải vào. Tuy nhiên do tải reflective injection sẽ cấp phát vùng nhớ ngẫu nhiên, không nằm trong native address nên cần xử lý bảng relocation để có thể hoạt động ổn định.
 Trước hết cần đọc Relocation Table tương tự Import Table, lấy địa chỉ vùng này. Vùng này có cấu trúc gồm các khối Relocation Block nối tiếp nhau. Mỗi khối bắt đầu với struct IMAGE_BASE_RELOCATION kích thước 8 byte, chứa thông tin về kích thước khối và địa chỉ RVA của Trang tương ứng với khối này. Tiếp nối sau đó là các struct 2 byte, với 4 byte chỉ type Reloc và 12 byte offset của giá trị Reloc so với địa chỉ của Trang.
 Viết lại toàn bộ giá trị reloc với giá trị Delta Image = địa chỉ Image thật sự trong bộ nhớ - địa chỉ image native.
-5. Sau khi duyệt qua, ta có gọi entry point là địa chỉ hàm DLLMAIN + imageBase để chạy nội dung chính của DLL.
+
+### Gọi Entry Point của DLL
+Sau khi duyệt qua, ta có gọi entry point là địa chỉ hàm DLLMAIN + imageBase để chạy nội dung chính của DLL.
