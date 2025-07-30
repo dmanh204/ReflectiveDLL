@@ -26,7 +26,7 @@ typedef struct _PEB_LDR_DATA //, 7 elements, 0x28 bytes
 	LIST_ENTRY InMemoryOrderModuleList;
 	LIST_ENTRY InInitializationOrderModuleList;
 	LPVOID lpEntryInProgress;
-} PEB_LDR_DATA, * PPEB_LDR_DATA;
+} PEB_LDR_DATA1, * PPEB_LDR_DATA1;
 
 typedef struct _LDR_DATA_TABLE_ENTRY
 {
@@ -43,7 +43,7 @@ typedef struct _LDR_DATA_TABLE_ENTRY
 	SHORT TlsIndex;
 	LIST_ENTRY HashTableEntry;
 	ULONG TimeDateStamp;
-} LDR_DATA_TABLE_ENTRY, * PLDR_DATA_TABLE_ENTRY;
+} LDR_DATA_TABLE_ENTRY1, * PLDR_DATA_TABLE_ENTRY1;
 
 typedef struct _PEB_FREE_BLOCK // 2 elements, 0x8 bytes
 {
@@ -60,7 +60,7 @@ typedef struct __PEB // 65 elements, 0x210 bytes
 	BYTE bSpareBool;
 	LPVOID lpMutant;
 	LPVOID lpImageBaseAddress;
-	PPEB_LDR_DATA pLdr;
+	PPEB_LDR_DATA1 pLdr;
 	LPVOID lpProcessParameters;
 	LPVOID lpSubSystemData;
 	LPVOID lpProcessHeap;
